@@ -225,14 +225,14 @@ if 'report' in st.session_state:
     st.caption('Size confidence: ' + result.repair_size.confidence + ' · Evidence photos: ' +
                (', '.join(map(str, result.repair_size.photo_numbers)) or 'None'))
     st.write(f'Vehicle: {result.vehicle_type} · Powertrain: {result.powertrain}')
-    st.write('AI labour assumptions: ' + result.labour.basis_and_assumptions)
     st.divider()
     st.subheader('Review and adjust')
-    st.caption('Changes apply immediately to the summary and download. No additional AI request is made.')
+    st.caption('Changes are included in the download. No additional AI request is made.')
     st.button('Reset to AI suggestions', on_click=clear_review)
-    original_combined_text = result.short_description + '\n\n' + result.repair_size.explanation
-    edited_description = st.text_area('Short description and size explanation', value=original_combined_text,
-                                       height=150, key='review_description_and_size',
+    original_combined_text = '\n\n'.join([result.short_description, result.repair_size.explanation,
+                                          result.labour.basis_and_assumptions])
+    edited_description = st.text_area('Short description, size explanation and labour assumptions', value=original_combined_text,
+                                       height=180, key='review_description_size_and_labour',
                                        help='Edit the AI suggestion. Your wording is included in the downloaded assessment.')
     size_options = ['Small', 'Medium', 'Large', 'No visible damage', 'Not assessable']
     size_labels = {'Small': '🟢 Small', 'Medium': '🟠 Medium', 'Large': '🔴 Large',
@@ -266,18 +266,6 @@ if 'report' in st.session_state:
                edited_low != low or edited_high != high or
                edited_description != original_combined_text)
     st.caption('User-adjusted estimate' if changed else 'Estimate matches the AI suggestion')
-    st.caption('Current reviewed values')
-    a, b, c = st.columns(3)
-    colour, background = {'Small': ('#166534', '#dcfce7'),
-                          'Medium': ('#9a3412', '#ffedd5'),
-                          'Large': ('#991b1b', '#fee2e2')}.get(selected_size, ('#334155', '#f1f5f9'))
-    a.markdown(f'<div style="background:{background};color:{colour};border:1px solid {colour};'
-               f'border-radius:14px;padding:1rem 1.15rem">Repair size<br>'
-               f'<strong style="font-size:1.9rem">{html.escape(selected_size)}</strong></div>',
-               unsafe_allow_html=True)
-    b.metric('Damaged panels', selected_panels)
-    reviewed_hours = (f'{edited_low:g}–{edited_high:g} h' if valid_hours else 'Invalid range') if has_hours else 'Not estimable'
-    c.metric('Estimated labour', reviewed_hours)
     st.divider()
     st.subheader('Parts and damage — AI findings')
     st.caption('Manual panel-count changes do not alter this original parts list.')
@@ -311,6 +299,7 @@ if 'report' in st.session_state:
                                       'modified_by_user': changed, 'reviewer_notes': review_note},
                    original_ai_summary={'short_description': result.short_description,
                                         'size_explanation': result.repair_size.explanation,
+                                        'labour_assumptions': result.labour.basis_and_assumptions,
                                         'repair_size': size, 'panel_count': count,
                                         'minimum_hours': low, 'maximum_hours': high})
     payload.pop('case_id')
