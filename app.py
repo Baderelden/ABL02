@@ -206,8 +206,6 @@ if 'report' in st.session_state:
     count, size = panel_summary(result)
     st.divider()
     st.markdown('<div class="abl-section">03 · Assessment results</div>', unsafe_allow_html=True)
-    st.markdown('<div class="abl-summary">' + html.escape(result.short_description) + '</div>',
-                unsafe_allow_html=True)
     if result.status != 'Assessable':
         st.warning(result.status)
     low, high = result.labour.minimum_hours, result.labour.maximum_hours
@@ -224,40 +222,17 @@ if 'report' in st.session_state:
     b.metric('Damaged panels', count)
     c.metric('Estimated labour', hours)
     st.caption('Based on visible severity, deformation and likely repair complexity. Panel count is descriptive only.')
-    st.write('AI size explanation: ' + result.repair_size.explanation)
     st.caption('Size confidence: ' + result.repair_size.confidence + ' · Evidence photos: ' +
                (', '.join(map(str, result.repair_size.photo_numbers)) or 'None'))
     st.write(f'Vehicle: {result.vehicle_type} · Powertrain: {result.powertrain}')
-    st.subheader('Parts and damage — AI findings')
-    st.caption('Manual panel-count changes do not alter this original parts list.')
-    if result.damaged_parts:
-        st.dataframe([
-            {'Part': p.part.value, 'Damage': p.damage, 'Finding': p.certainty,
-             'Photo(s)': ', '.join(map(str, p.photo_numbers)),
-             'Panel counted': 'Yes' if p.part.value in PANEL_NAMES and p.certainty == 'Observed' else 'No'}
-            for p in result.damaged_parts
-        ], hide_index=True, width='stretch')
-    else:
-        st.info('No damaged parts could be confirmed from these photos.')
     st.write('AI labour assumptions: ' + result.labour.basis_and_assumptions)
-    st.subheader('Special needs')
-    if result.special_needs:
-        for need in result.special_needs:
-            st.write(f'• {need.requirement} — {need.reason} ({need.basis})')
-    else:
-        st.write('None identified from the available evidence; vehicle details may still need confirmation.')
-    if result.limitations or result.additional_photos_needed:
-        with st.expander('Limitations and useful additional photos', expanded=True):
-            for item in result.limitations:
-                st.write('• ' + item)
-            for item in result.additional_photos_needed:
-                st.write('• Additional photo: ' + item)
     st.divider()
     st.subheader('Review and adjust')
     st.caption('Changes apply immediately to the summary and download. No additional AI request is made.')
     st.button('Reset to AI suggestions', on_click=clear_review)
-    edited_description = st.text_area('Short description', value=result.short_description,
-                                       height=100, key='review_description',
+    original_combined_text = result.short_description + '\n\n' + result.repair_size.explanation
+    edited_description = st.text_area('Short description and size explanation', value=original_combined_text,
+                                       height=150, key='review_description_and_size',
                                        help='Edit the AI suggestion. Your wording is included in the downloaded assessment.')
     size_options = ['Small', 'Medium', 'Large', 'No visible damage', 'Not assessable']
     size_labels = {'Small': '🟢 Small', 'Medium': '🟠 Medium', 'Large': '🔴 Large',
@@ -289,11 +264,9 @@ if 'report' in st.session_state:
                                placeholder='Briefly explain any changes to the AI suggestion.')
     changed = (selected_size != size or selected_panels != count or
                edited_low != low or edited_high != high or
-               edited_description != result.short_description)
+               edited_description != original_combined_text)
     st.caption('User-adjusted estimate' if changed else 'Estimate matches the AI suggestion')
-    st.subheader('Reviewed estimate')
-    st.markdown('<div class="abl-summary">' + html.escape(edited_description) + '</div>',
-                unsafe_allow_html=True)
+    st.caption('Current reviewed values')
     a, b, c = st.columns(3)
     colour, background = {'Small': ('#166534', '#dcfce7'),
                           'Medium': ('#9a3412', '#ffedd5'),
@@ -305,14 +278,39 @@ if 'report' in st.session_state:
     b.metric('Damaged panels', selected_panels)
     reviewed_hours = (f'{edited_low:g}–{edited_high:g} h' if valid_hours else 'Invalid range') if has_hours else 'Not estimable'
     c.metric('Estimated labour', reviewed_hours)
-    payload = dict(report, short_description=edited_description,
+    st.divider()
+    st.subheader('Parts and damage — AI findings')
+    st.caption('Manual panel-count changes do not alter this original parts list.')
+    if result.damaged_parts:
+        st.dataframe([
+            {'Part': p.part.value, 'Damage': p.damage, 'Finding': p.certainty,
+             'Photo(s)': ', '.join(map(str, p.photo_numbers)),
+             'Panel counted': 'Yes' if p.part.value in PANEL_NAMES and p.certainty == 'Observed' else 'No'}
+            for p in result.damaged_parts
+        ], hide_index=True, width='stretch')
+    else:
+        st.info('No damaged parts could be confirmed from these photos.')
+    st.subheader('Special needs')
+    if result.special_needs:
+        for need in result.special_needs:
+            st.write(f'• {need.requirement} — {need.reason} ({need.basis})')
+    else:
+        st.write('None identified from the available evidence; vehicle details may still need confirmation.')
+    if result.limitations or result.additional_photos_needed:
+        with st.expander('Limitations and useful additional photos', expanded=True):
+            for item in result.limitations:
+                st.write('• ' + item)
+            for item in result.additional_photos_needed:
+                st.write('• Additional photo: ' + item)
+    payload = dict(report, description_and_size_explanation=edited_description,
                    panel_count=selected_panels, damage_size=selected_size,
                    sizing_method='user_reviewed' if changed else 'visual_severity_and_complexity_v2',
-                   reviewed_estimate={'short_description': edited_description,
+                   reviewed_estimate={'description_and_size_explanation': edited_description,
                                       'repair_size': selected_size, 'panel_count': selected_panels,
                                       'minimum_hours': edited_low, 'maximum_hours': edited_high,
                                       'modified_by_user': changed, 'reviewer_notes': review_note},
                    original_ai_summary={'short_description': result.short_description,
+                                        'size_explanation': result.repair_size.explanation,
                                         'repair_size': size, 'panel_count': count,
                                         'minimum_hours': low, 'maximum_hours': high})
     payload.pop('case_id')
