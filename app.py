@@ -81,6 +81,12 @@ def setting(name, default=''):
         return default
 
 
+def clear_review():
+    for key in list(st.session_state):
+        if key.startswith('review_'):
+            del st.session_state[key]
+
+
 password = setting('APP_PASSWORD')
 if password and not st.session_state.get('authenticated'):
     left, centre, right = st.columns([1, 1.2, 1])
@@ -110,7 +116,6 @@ with heading_col:
 st.markdown('<div class="abl-rule"></div>', unsafe_allow_html=True)
 
 with st.sidebar:
-    st.image(str(LOGO_PATH), width=105)
     st.caption('Assessment Console')
     st.divider()
     st.header('Assessment settings')
@@ -128,6 +133,7 @@ with st.sidebar:
                          placeholder='For example: electric SUV, model/year, or large truck.')
     st.caption('Photos are sent to OpenAI when you click Assess vehicle.')
     if st.button('Clear photos and assessment'):
+        clear_review()
         st.session_state.pop('report', None)
         st.session_state.upload_generation = st.session_state.get('upload_generation', 0) + 1
         st.rerun()
@@ -161,10 +167,12 @@ for f in files:
 fingerprint.update(json.dumps([model, notes, "visual-repair-size-v2"]).encode())
 case_id = fingerprint.hexdigest()
 if st.session_state.get('report', {}).get('case_id') != case_id:
+    clear_review()
     st.session_state.pop('report', None)
 
 st.markdown('<div class="abl-section">02 · Generate assessment</div>', unsafe_allow_html=True)
 if st.button('Assess vehicle', type='primary', disabled=not images or bool(errors), width='stretch'):
+    clear_review()
     st.session_state.pop('report', None)
     if not api_key:
         st.error('Add an OpenAI API key in the sidebar or in Streamlit secrets.')
@@ -204,16 +212,60 @@ if 'report' in st.session_state:
         st.warning(result.status)
     low, high = result.labour.minimum_hours, result.labour.maximum_hours
     hours = f'{low:g}–{high:g} h' if low is not None else 'Not estimable'
+    st.caption(f'Original AI suggestion: {size} · {count} panels · {hours}')
+    st.subheader('Review and adjust')
+    st.caption('Changes apply immediately to the summary and download. No additional AI request is made.')
+    st.button('Reset to AI suggestions', on_click=clear_review)
+    size_options = ['Small', 'Medium', 'Large', 'No visible damage', 'Not assessable']
+    size_labels = {'Small': '🟢 Small', 'Medium': '🟠 Medium', 'Large': '🔴 Large',
+                   'No visible damage': 'No visible damage', 'Not assessable': 'Not assessable'}
+    left, right = st.columns(2)
+    selected_size = left.selectbox('Repair size', size_options, index=size_options.index(size),
+                                   format_func=lambda value: size_labels[value], key='review_size')
+    panel_options = list(range(13)) + ['13 or more']
+    selected_panels = right.selectbox('Number of damaged panels', panel_options,
+                                      index=count if count <= 12 else 13, key='review_panels')
+    if selected_panels == '13 or more':
+        selected_panels = st.number_input('Exact panel count (13 or more)', min_value=13,
+                                          value=max(13, count), step=1, key='review_panel_exact')
+    has_hours = st.checkbox('Provide a labour-hours estimate', value=low is not None,
+                            key='review_has_hours')
+    edited_low = edited_high = None
+    valid_hours = True
+    if has_hours:
+        left, right = st.columns(2)
+        edited_low = left.number_input('Minimum labour hours', min_value=0.0,
+                                       value=float(low or 0), step=0.5, key='review_low')
+        edited_high = right.number_input('Maximum labour hours', min_value=0.0,
+                                         value=float(high or 0), step=0.5, key='review_high')
+        valid_hours = edited_high >= edited_low
+        if not valid_hours:
+            st.error('Maximum hours must be at least the minimum. Correct the range to enable download.')
+        st.caption('Use the same value in both boxes for a single estimate. Hours mean active labour, not elapsed workshop time.')
+    review_note = st.text_area('Reviewer notes (optional)', key='review_note', max_chars=1500,
+                               placeholder='Briefly explain any changes to the AI suggestion.')
+    changed = (selected_size != size or selected_panels != count or
+               edited_low != low or edited_high != high)
+    st.caption('User-adjusted estimate' if changed else 'Estimate matches the AI suggestion')
+    st.subheader('Current estimate')
     a, b, c = st.columns(3)
-    a.metric('Repair size (visual estimate)', size)
-    b.metric('Confirmed damaged panels', count)
-    c.metric('Estimated labour', hours)
+    colour, background = {'Small': ('#166534', '#dcfce7'),
+                          'Medium': ('#9a3412', '#ffedd5'),
+                          'Large': ('#991b1b', '#fee2e2')}.get(selected_size, ('#334155', '#f1f5f9'))
+    a.markdown(f'<div style="background:{background};color:{colour};border:1px solid {colour};'
+               f'border-radius:14px;padding:1rem 1.15rem">Repair size<br>'
+               f'<strong style="font-size:1.9rem">{html.escape(selected_size)}</strong></div>',
+               unsafe_allow_html=True)
+    b.metric('Damaged panels', selected_panels)
+    reviewed_hours = (f'{edited_low:g}–{edited_high:g} h' if valid_hours else 'Invalid range') if has_hours else 'Not estimable'
+    c.metric('Estimated labour', reviewed_hours)
     st.caption('Based on visible severity, deformation and likely repair complexity. Panel count is descriptive only.')
-    st.write('Why this size: ' + result.repair_size.explanation)
+    st.write('Original AI size explanation: ' + result.repair_size.explanation)
     st.caption('Size confidence: ' + result.repair_size.confidence + ' · Evidence photos: ' +
                (', '.join(map(str, result.repair_size.photo_numbers)) or 'None'))
     st.write(f'Vehicle: {result.vehicle_type} · Powertrain: {result.powertrain}')
-    st.subheader('Parts and damage')
+    st.subheader('Parts and damage — AI findings')
+    st.caption('Manual panel-count changes do not alter this original parts list.')
     if result.damaged_parts:
         st.dataframe([
             {'Part': p.part.value, 'Damage': p.damage, 'Finding': p.certainty,
@@ -223,7 +275,7 @@ if 'report' in st.session_state:
         ], hide_index=True, width='stretch')
     else:
         st.info('No damaged parts could be confirmed from these photos.')
-    st.write('Labour assumptions: ' + result.labour.basis_and_assumptions)
+    st.write('Original AI labour assumptions: ' + result.labour.basis_and_assumptions)
     st.subheader('Special needs')
     if result.special_needs:
         for need in result.special_needs:
@@ -236,10 +288,18 @@ if 'report' in st.session_state:
                 st.write('• ' + item)
             for item in result.additional_photos_needed:
                 st.write('• Additional photo: ' + item)
-    payload = dict(report, panel_count=count, damage_size=size, sizing_method='visual_severity_and_complexity_v2')
+    payload = dict(report, panel_count=selected_panels, damage_size=selected_size,
+                   sizing_method='user_reviewed' if changed else 'visual_severity_and_complexity_v2',
+                   reviewed_estimate={'repair_size': selected_size, 'panel_count': selected_panels,
+                                      'minimum_hours': edited_low, 'maximum_hours': edited_high,
+                                      'modified_by_user': changed, 'reviewer_notes': review_note},
+                   original_ai_summary={'repair_size': size, 'panel_count': count,
+                                        'minimum_hours': low, 'maximum_hours': high})
     payload.pop('case_id')
     st.download_button('Download assessment (JSON)', json.dumps(payload, indent=2, ensure_ascii=False),
-                       file_name='vehicle-assessment.json', mime='application/json')
+                       file_name='vehicle-assessment.json', mime='application/json', disabled=not valid_hours)
+    st.caption('The download includes your reviewed estimate and the unchanged original AI assessment. '
+               'Edits are held only in this session; download them before clearing or leaving the app.')
     with st.expander('Model and usage'):
         st.write(report['model'])
         st.json(report['usage'] or {})
